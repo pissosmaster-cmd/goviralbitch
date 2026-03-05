@@ -43,7 +43,7 @@ python3 --version
 Check each critical import:
 
 ```bash
-python3 -c "import openai; print('openai OK')" 2>&1
+python3 -c "import whisper; print('whisper OK')" 2>&1
 python3 -c "import instaloader; print('instaloader OK')" 2>&1
 python3 -c "import yt_dlp; print('yt_dlp OK')" 2>&1
 python3 -c "import flask; print('flask OK')" 2>&1
