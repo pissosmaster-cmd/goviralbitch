@@ -166,18 +166,20 @@ Windows users should use WSL (Windows Subsystem for Linux):
 
 ### "command not found" for yt-dlp or instaloader
 
-Your shell PATH may not include pip's bin directory. Add to your shell profile:
+Your shell PATH may not include pip's bin directory. Add to your shell profile (`~/.zshrc` or `~/.bashrc`):
 
 ```bash
-# ~/.zshrc or ~/.bashrc
+# macOS with Python.org installer
+export PATH="/Library/Frameworks/Python.framework/Versions/3.14/bin:$PATH"
+
+# macOS with Homebrew
+export PATH="/opt/homebrew/bin:$PATH"
+
+# Linux / WSL
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-On macOS with Homebrew:
-
-```bash
-export PATH="/opt/homebrew/bin:$PATH"
-```
+Then reload: `source ~/.zshrc`
 
 ### YouTube API quota exceeded
 
