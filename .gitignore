@@ -43,6 +43,10 @@ node_modules/
 # PAUL workflow state (development only)
 .paul/
 
+# Personal reports and scraped video data
+*-report.md
+∕tmp∕*/
+
 # SQLite databases
 *.db
 *.sqlite
