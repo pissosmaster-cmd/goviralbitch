@@ -391,16 +391,24 @@ CTA: {cta_copy}
 ...
 ```
 
-After displaying, ask:
+After displaying, run a two-step selection flow:
 
+**Step 1 — Which angles to save?**
 ```
-Keep all angles? [Y/n]
-Or type numbers to pass on specific angles (e.g., "pass 2, 7, 12")
+Which angles do you want to save? (Enter for all, or list numbers e.g. "1 3 5 7")
+Pass on any? (e.g. "pass 2 8 12" — these won't be saved)
 ```
+- Default (Enter): save all as "draft"
+- Numbers only: save only those angles
+- "pass N": skip those specific angles (don't save them)
+- User can type feedback to refine a specific angle before saving
 
-- Default (Enter or "y"): keep all as "draft"
-- "pass N": mark those angles with `status: "passed"` (won't develop further)
-- User can also type feedback to refine a specific angle
+**Step 2 — Script one now?**
+```
+Want to script one of these now? Enter an angle number, or skip (Enter to skip)
+```
+- If user picks a number: proceed to Phase F (save first), then immediately run /viral:script with that angle pre-loaded (pass the angle ID as context)
+- If Enter/skip: proceed to Phase F (save), then display the "Next: Run /viral:script" prompt as usual
 
 ---
 
@@ -478,9 +486,11 @@ Save all kept angles to `data/angles.jsonl`:
   {id}: "{title}" [{contrast_strength}]
   {id}: "{title}" [{contrast_strength}]
 
-Next: Run /viral:script to generate hooks and scripts.
+Next: Run /viral:script to generate hooks and scripts for any of these angles.
 ═══════════════════════════════════════════════════
 ```
+
+If the user selected an angle to script in Step 2 above, immediately continue into the `/viral:script` flow with that angle's ID pre-loaded — skip the format/angle selection questions and go straight to hook generation.
 
 ---
 
