@@ -137,12 +137,23 @@ Enter numbers (e.g., "1,3,5") or "skip" to continue without transcription:
 
 **For each selected video/reel:**
 
-**YouTube transcription:**
+**YouTube transcription + visual analysis:**
 ```bash
-# Download audio
+# 1. Download audio for transcription
 yt-dlp -x --audio-format mp3 -o "/tmp/viral-discover-yt/%(id)s.%(ext)s" "https://youtube.com/watch?v=${VIDEO_ID}"
 
-# Transcribe with OpenAI Whisper API (preferred — faster, more reliable)
+# 2. Download first 60 seconds of video for visual hook analysis (480p max to keep size small)
+yt-dlp --download-sections "*0-60" -f "best[height<=480][ext=mp4]/best[height<=480]/best" \
+  -o "/tmp/viral-discover-yt/%(id)s_visual.%(ext)s" "https://youtube.com/watch?v=${VIDEO_ID}"
+
+# 3. Extract frames from hook section (0-20 seconds for longform, 1 frame/sec = 20 frames)
+mkdir -p "/tmp/viral-discover-yt/${VIDEO_ID}_frames"
+ffmpeg -i "/tmp/viral-discover-yt/${VIDEO_ID}_visual.mp4" -t 20 -vf "fps=1" \
+  "/tmp/viral-discover-yt/${VIDEO_ID}_frames/frame_%02d.jpg" -y 2>/dev/null || \
+ffmpeg -i "/tmp/viral-discover-yt/${VIDEO_ID}_visual.webm" -t 20 -vf "fps=1" \
+  "/tmp/viral-discover-yt/${VIDEO_ID}_frames/frame_%02d.jpg" -y 2>/dev/null
+
+# 4. Transcribe with OpenAI Whisper API (preferred — faster, more reliable)
 curl -s https://api.openai.com/v1/audio/transcriptions \
   -H "Authorization: Bearer ${OPENAI_API_KEY}" \
   -F file="@/tmp/viral-discover-yt/${VIDEO_ID}.mp3" \
@@ -155,20 +166,69 @@ If OpenAI API unavailable, fall back to local whisper:
 whisper "/tmp/viral-discover-yt/${VIDEO_ID}.mp3" --model base --output_format txt --output_dir /tmp/viral-discover-yt/
 ```
 
-**Instagram transcription:**
+**Instagram transcription + visual analysis:**
 ```bash
-# Download reel video
+# 1. Download reel video (used for BOTH audio + visual — no need to download twice)
 python3 -m instaloader --dirname-pattern="/tmp/viral-discover-ig/{profile}" -- -${SHORTCODE}
 
-# Extract audio and transcribe (same as YouTube)
-ffmpeg -i "/tmp/viral-discover-ig/${HANDLE}/${POST_FILE}" -vn -acodec libmp3lame "/tmp/viral-discover-ig/${HANDLE}/${SHORTCODE}.mp3"
+# 2. Extract audio for transcription
+ffmpeg -i "/tmp/viral-discover-ig/${HANDLE}/${POST_FILE}" -vn -acodec libmp3lame \
+  "/tmp/viral-discover-ig/${HANDLE}/${SHORTCODE}.mp3"
 
-# Then use OpenAI Whisper API or local whisper (same as above)
+# 3. Extract frames from hook section (0-15 seconds, 1 frame/sec)
+mkdir -p "/tmp/viral-discover-ig/${HANDLE}/${SHORTCODE}_frames"
+ffmpeg -i "/tmp/viral-discover-ig/${HANDLE}/${POST_FILE}" -t 15 -vf "fps=1" \
+  "/tmp/viral-discover-ig/${HANDLE}/${SHORTCODE}_frames/frame_%02d.jpg" -y 2>/dev/null
+
+# 4. Then use OpenAI Whisper API or local whisper (same as YouTube above)
 ```
 
-### Step 5: Dissect Transcripts
+**Visual analysis — read frames directly (no separate API key needed):**
 
-For each transcribed piece, produce a breakdown:
+After frame extraction, use the Read tool to load the images directly into the current Claude Code session and analyze them visually. This requires **no API key** — it runs on your existing Claude Code subscription.
+
+```
+VISUAL ANALYSIS INSTRUCTIONS (run after frames are extracted):
+
+1. Confirm frames exist:
+   - YouTube: /tmp/viral-discover-yt/{VIDEO_ID}_frames/frame_*.jpg
+   - Instagram: /tmp/viral-discover-ig/{HANDLE}/{SHORTCODE}_frames/frame_*.jpg
+
+2. Use the Read tool to load up to 10 frames — read each file path directly as an image:
+   - **YouTube longform (20s window):** Priority: frame_01-04.jpg (hook), then sample: frame_06, frame_08, frame_10, frame_14, frame_18, frame_20.jpg
+   - **Instagram / YouTube Shorts (15s window):** Priority: frame_01-04.jpg (hook), then sample: frame_06, frame_08, frame_10, frame_12.jpg
+
+3. After reading the frames, analyze what's visible and produce:
+   - VISUAL HOOK (0-3s): What does the viewer SEE instantly?
+     • Creator on camera? Expression/energy?
+     • Text overlays? Exact wording if legible?
+     • Background/setting?
+     • B-roll, screen recording, or demo footage?
+     • What makes it visually impossible to scroll past?
+   - TEXT ON SCREEN: Any captions, title cards, or overlays
+   - VISUAL PACING: Slow/medium/fast? Zoom or motion effects?
+   - WHAT'S BEING SHOWN (not said): Results proof, tool demo, problem scenario?
+   - VISUAL HOOK TYPE: face_reaction | screen_demo | result_reveal | text_hook | b_roll_contrast | talking_head | pattern_interrupt_visual
+   - STEAL THIS: One specific visual tactic Charles could replicate immediately
+
+4. If any step fails, log it to a failures list with the reason. Track each failure as:
+   - Which video (title + URL)
+   - Which step failed (video download / frame extraction / frame read)
+   - Why it failed (error message from yt-dlp, ffmpeg, or Read tool)
+   - Whether it's retryable (yes for rate limits/timeouts, no for missing content/private accounts)
+
+   Common failure reasons:
+   - yt-dlp: "Video unavailable" (not retryable), "HTTP 429" (retryable — rate limit)
+   - ffmpeg: "No such file" (video download failed first), "Invalid data" (corrupt download — retryable)
+   - instaloader: "403 Forbidden" (retryable — rate limit), "Login required" (not retryable without auth)
+   - Read tool: "No such file" (frames weren't extracted — check ffmpeg step)
+
+   Continue without blocking the rest of the flow.
+```
+
+### Step 5: Dissect Transcripts + Visual Analysis
+
+For each transcribed piece, produce a breakdown combining **verbal** (from transcript) and **visual** (from frame analysis) insights:
 
 ```
 ═══════════════════════════════════════════════════
@@ -177,14 +237,25 @@ By: {competitor} ({platform})
 Views: {views} | Engagement: {rate}%
 ═══════════════════════════════════════════════════
 
-HOOK (first 3 seconds / first line):
-"{exact opening words}"
+VERBAL HOOK (first 3 seconds — what they SAY):
+"{exact opening words from transcript}"
 → Hook type: {contradiction/specificity/pattern interrupt/etc.}
 → Why it works: {1-2 sentences}
 
+VISUAL HOOK (first 3 seconds — what viewer SEES):
+→ On screen: {what's visible — creator face/expression, B-roll, screen demo, etc.}
+→ Text overlays: "{any text cards or captions on screen}"
+→ Visual type: {face_reaction | screen_demo | result_reveal | text_hook | b_roll_contrast | talking_head | pattern_interrupt_visual}
+→ Pattern interrupt: {what makes it visually impossible to scroll past}
+→ Pacing: {slow/medium/fast cuts, any zoom or motion}
+[If visual unavailable: visual: unavailable — {reason}]
+
+WHAT'S SHOWN (not said) during setup (0:03-0:20 for longform, 0:03-0:15 for shorts/reels):
+→ {what's on screen — results proof, tool demo, problem scenario, etc.}
+
 STRUCTURE:
-1. Hook (0:00-0:03): {what happens}
-2. Setup (0:03-0:15): {what happens}
+1. Hook (0:00-0:03): {verbal + visual combined — what they say AND show}
+2. Setup (0:03-0:15 shorts | 0:03-0:20 longform): {what happens}
 3. Body (0:15-0:45): {what happens}
 4. CTA (0:45-end): {what happens}
 
@@ -195,7 +266,8 @@ ANGLES USED:
 WHY IT WORKED:
 - {engagement signal 1}
 - {engagement signal 2}
-- {what Charles could learn from this}
+- {what Charles could learn from this — verbal}
+- {what Charles could steal visually — one specific tactic}
 
 ═══════════════════════════════════════════════════
 ```
@@ -249,6 +321,14 @@ For each selected hook, build a swipe entry object matching `schemas/swipe-hook.
   "hook_text": "{exact opening words from transcript dissection — full hook line, not truncated}",
   "pattern": "{pattern identified in Step 5 dissection — use exact enum value: contradiction/specificity/timeframe_tension/pov_as_advice/vulnerable_confession/pattern_interrupt}",
   "why_it_works": "{the 'Why it works' analysis from Step 5 dissection — 1-2 sentences}",
+  "visual_hook": {
+    "available": true,
+    "type": "{face_reaction | screen_demo | result_reveal | text_hook | b_roll_contrast | talking_head | pattern_interrupt_visual — from Step 5 VISUAL HOOK section, or null if unavailable}",
+    "on_screen": "{what the viewer sees in the first 3 seconds — from Step 5 visual analysis, or null}",
+    "text_overlays": "{any text cards or captions visible on screen in hook, or null}",
+    "pattern_interrupt": "{the visual tactic that makes it impossible to scroll past, or null}",
+    "steal_this": "{one specific visual tactic Charles could copy — from Step 5 TAKEAWAY, or null}"
+  },
   "competitor": "{competitor name from agent brain}",
   "platform": "{youtube_longform or instagram_reels — whichever this content came from}",
   "url": "{direct URL from Step 3 table}",
@@ -266,6 +346,8 @@ For each selected hook, build a swipe entry object matching `schemas/swipe-hook.
   "notes": ""
 }
 ```
+
+**If visual analysis was unavailable** for a video (frame extraction failed or `ANTHROPIC_API_KEY` not set), set `visual_hook.available = false` and all other `visual_hook` fields to `null`.
 
 **Fill `engagement` with actual stats** from the Step 3 ranking table (views, likes, comments, engagement_rate).
 
@@ -463,10 +545,24 @@ DISCOVERY COMPLETE
 Competitors analyzed: {N}
   YouTube: {list handles} — {N} videos pulled
   Instagram: {list handles} — {N} posts pulled
-Transcriptions done: {N}
+Transcriptions done: {N} ({N} verbal + {N} visual)
 Trend queries run: {N} (or "skipped")
 Total topics scored: {N} → {N saved} (after dedup + threshold)
 Saved to: data/topics/{YYYY-MM-DD}-topics.jsonl
+
+FAILURES ({N} total — {N} retryable)
+───────────────────────────────────────────────────
+{If no failures: "None — all steps completed successfully."}
+
+{For each failure:}
+ ⚠ {video title} ({platform})
+   Step: {video download | frame extraction | transcription | frame read}
+   Error: {actual error message, truncated to 1 line}
+   Retryable: {YES — retry later / NO — {reason}}
+───────────────────────────────────────────────────
+{If any retryable failures:}
+To retry failed items only, run /viral:discover again — cached
+successes won't re-download, only failures will re-attempt.
 
 TOP TOPICS BY SCORE
 ───────────────────────────────────────────────────
