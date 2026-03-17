@@ -13,7 +13,7 @@ Parse for:
 - `--content-id [ID]` — Analyze a specific script by ID
 - `--recent [N]` — Analyze last N published pieces (default: 5)
 - `--manual` — Non-interactive mode for cron/automation (skips prompts, analyzes all published content, runs full pipeline A-H without pauses)
-- `--deep-analysis` — Skip straight to Phase G.6 top 10 ranking + transcript/visual analysis (no new analytics collection — uses existing data)
+- `--deep-analysis` — Skip straight to Phase G.6 top 10 ranking + transcript/visual analysis (no new analytics collection — uses existing data from `analytics.jsonl`)
 
 ---
 
@@ -169,7 +169,181 @@ Content to analyze: [--content-id / --recent N / ask user]
 
 ## Phase B: Content Discovery
 
-### Step 1: Find Content to Analyze
+**Default behavior (no targeting flags): Account-wide auto-scan.** Pull all content from YouTube channel + Instagram account, rank by performance, show top 10, then offer deep analysis. No prompts about which videos to analyze.
+
+Set `ACCOUNT_SCAN_MODE = true` if no `--content-id` or `--recent N` flag was provided.
+
+---
+
+### Account Scan Mode (DEFAULT)
+
+Skip to "Targeted Mode" section below only if `--content-id` or `--recent N` flags are present.
+
+#### Step 1: YouTube Channel Scan
+
+Get the user's channel ID using the OAuth token:
+
+```bash
+python3 - <<'EOF'
+import json, urllib.request, os
+token_path = os.path.expanduser('~/.viral-command/yt-token.json')
+with open(token_path) as f:
+    token_data = json.load(f)
+access_token = token_data.get('access_token', '')
+req = urllib.request.Request(
+    'https://www.googleapis.com/youtube/v3/channels?part=id,contentDetails,snippet&mine=true',
+    headers={'Authorization': f'Bearer {access_token}'}
+)
+with urllib.request.urlopen(req) as r:
+    data = json.load(r)
+    ch = data['items'][0]
+    print(json.dumps({
+        'channel_id': ch['id'],
+        'title': ch['snippet']['title'],
+        'uploads_playlist': ch['contentDetails']['relatedPlaylists']['uploads']
+    }))
+EOF
+```
+
+If OAuth fails, fall back to `YOUTUBE_CHANNEL_ID` in `.env`. If still missing, ask once: *"What's your YouTube channel ID? (e.g., UCxxxxxxxx)"*
+
+Pull up to 50 most recent videos from the uploads playlist:
+
+```bash
+# Page through uploads playlist (max 50 per call)
+source "$(pwd)/.env" 2>/dev/null
+curl -s "https://www.googleapis.com/youtube/v3/playlistItems?part=snippet&playlistId=${UPLOADS_PLAYLIST_ID}&maxResults=50&key=${YOUTUBE_DATA_API_KEY}"
+```
+
+Extract all video IDs. Batch-fetch statistics + content details:
+
+```bash
+VIDEO_IDS=$(echo "${IDS[@]}" | tr ' ' ',')
+curl -s "https://www.googleapis.com/youtube/v3/videos?part=statistics,contentDetails,snippet&id=${VIDEO_IDS}&key=${YOUTUBE_DATA_API_KEY}"
+```
+
+For each video, store:
+- `video_id`, `title`, `published_at`
+- `duration_seconds` — parse ISO 8601 duration (e.g., `PT11M8S` → 668s)
+- `format` — `youtube_shorts` if < 60s, else `youtube_longform`
+- `views` (statistics.viewCount), `likes` (statistics.likeCount), `comments` (statistics.commentCount)
+- `source_url` — `https://www.youtube.com/watch?v={video_id}`
+- `engagement_rate` = `(likes + comments) / max(views, 1) × 100`
+
+Then fetch `subscribers_gained` per video via Analytics API (if OAuth token exists):
+
+```bash
+python scripts/fetch-yt-analytics.py --video-id ${VIDEO_ID} --json
+```
+
+Extract `metrics.subscribers_gained` if available. If the script doesn't support `--video-id`, call the Analytics API directly:
+
+```bash
+python3 - <<'EOF'
+import json, urllib.request, os
+token_path = os.path.expanduser('~/.viral-command/yt-token.json')
+with open(token_path) as f:
+    td = json.load(f)
+access_token = td['access_token']
+video_id = os.environ['VIDEO_ID']
+start = os.environ.get('START_DATE', '2020-01-01')
+import datetime; end = datetime.date.today().isoformat()
+url = (f'https://youtubeanalytics.googleapis.com/v2/reports'
+       f'?ids=channel==MINE&startDate={start}&endDate={end}'
+       f'&metrics=subscribersGained&dimensions=video'
+       f'&filters=video=={video_id}&key=')
+req = urllib.request.Request(url, headers={'Authorization': f'Bearer {access_token}'})
+with urllib.request.urlopen(req) as r:
+    data = json.load(r)
+    rows = data.get('rows', [])
+    subs = rows[0][1] if rows else 0
+    print(json.dumps({'subscribers_gained': subs}))
+EOF
+```
+
+If Analytics API fails for any video, set `subscribers_gained = null` and continue.
+
+Show progress:
+```
+🔄 Scanning YouTube channel...
+   Found [N] videos — fetching stats...
+   ✓ YouTube: [N] videos loaded ([X] longform, [Y] shorts)
+```
+
+#### Step 2: Instagram Account Scan (instaloader mode)
+
+Get the user's Instagram handle from `data/agent-brain.json`:
+- Check `identity.instagram_handle` or `platforms.handles.instagram`
+- If not found, ask once: *"What's your Instagram handle? (without @)"*
+
+Run instaloader to pull account post metadata:
+
+```bash
+mkdir -p /tmp/viral-analyze-ig
+python3 -m instaloader --no-pictures --no-videos --no-video-thumbnails \
+  --post-metadata-txt="" --dirname-pattern="/tmp/viral-analyze-ig/{profile}" \
+  -- @{INSTAGRAM_HANDLE}
+```
+
+Parse all `.json` files in `/tmp/viral-analyze-ig/{handle}/`. For each file:
+- Skip if `node.is_video` is false (image posts — skip them)
+- Extract: `shortcode`, `taken_at_timestamp` (→ ISO date), `edge_liked_by.count` (likes), `edge_media_to_comment.count` (comments), `video_view_count` (views), `edge_media_to_caption.edges[0].node.text` (caption)
+- Build URL: `https://www.instagram.com/reel/{shortcode}/`
+- `engagement_rate` = `(likes + comments) / max(views, 1) × 100`
+
+**IMPORTANT:** Do NOT prompt for reach, saves, or follower growth — instaloader cannot access those metrics. Only use what was scraped.
+
+If instaloader fails (403, login required): show `⚠ Instagram scan skipped — [reason]` and continue with YouTube only.
+
+Show progress:
+```
+   ✓ Instagram: [N] Reels loaded
+```
+
+#### Step 3: Score & Rank — Top 10
+
+Combine all YouTube videos + Instagram Reels into one pool.
+
+Compute a **composite score** per piece:
+
+| Format | Score formula |
+|--------|--------------|
+| `youtube_longform` | `views × 0.35 + (subscribers_gained ?? 0) × 500 × 0.40 + engagement_rate × 1000 × 0.25` |
+| `youtube_shorts` | `views × 0.55 + engagement_rate × 1000 × 0.45` |
+| `instagram_reels` | `views × 0.55 + engagement_rate × 1000 × 0.45` |
+
+If `subscribers_gained` is null: redistribute its weight equally across the other two components.
+
+Sort descending by composite score. Take top 10.
+
+#### Step 4: Display Top 10 Table
+
+```
+════════════════════════════════════════
+📊 YOUR TOP 10 PERFORMING CONTENT
+════════════════════════════════════════
+
+ #  │ Platform          │ Title / Caption (first 55 chars)   │ Views    │ Eng%   │ Subs+
+────┼───────────────────┼────────────────────────────────────┼──────────┼────────┼───────
+ 1  │ YouTube Longform  │ [title]                            │ [N]      │ [N%]   │ +[N]
+    │                   │ https://youtube.com/watch?v=...    │          │        │
+────┼───────────────────┼────────────────────────────────────┼──────────┼────────┼───────
+ 2  │ Instagram Reel    │ [caption]...                       │ [N]      │ [N%]   │  —
+    │                   │ https://instagram.com/reel/...     │          │        │
+────┼───────────────────┼────────────────────────────────────┼──────────┼────────┼───────
+...
+════════════════════════════════════════
+```
+
+- Instagram `Subs+` always shows `—` (instaloader can't access follower gain data)
+- Every entry must show the direct clickable URL on the second line
+- If fewer than 10 pieces found, show however many exist
+
+**After displaying the table, jump directly to Phase G.6 Step 3.** (Skip Phases C, C.5, D, E, F, G, G.5 — they are for targeted mode only.)
+
+---
+
+### Targeted Mode (--content-id or --recent N flags only)
 
 **If `--content-id [ID]` provided:**
 - Look up script in `data/scripts.jsonl` by ID
@@ -181,14 +355,7 @@ Content to analyze: [--content-id / --recent N / ask user]
 - Display list with ID, title, platform, created date
 - Ask user: "Which of these have you published? (Enter numbers, 'all', or 'none')"
 
-**If neither flag:**
-- Ask: "What content would you like to analyze? You can provide:
-  1. A script ID from /viral:script (e.g., script_20260304_001)
-  2. A video/post URL
-  3. A title to search for
-  4. Or describe the content"
-
-### Step 2: Build Analysis Queue
+### Step 2: Build Analysis Queue (Targeted Mode Only)
 
 For each content piece, collect:
 - `content_id` — script ID if from scripts.jsonl, or generate `adhoc_{YYYYMMDD}_{NNN}`
@@ -199,7 +366,7 @@ For each content piece, collect:
 - `hook_pattern_used` — from linked script's hook data if available
 - `content_pillar` — from linked angle/topic if traceable
 
-### Step 3: Confirm Queue
+### Step 3: Confirm Queue (Targeted Mode Only)
 
 Display analysis queue:
 ```
@@ -213,6 +380,8 @@ Content to analyze:
 
 Proceed? (yes / edit / cancel)
 ```
+
+In targeted mode, continue to Phases C → D → E → F → G → G.5 → G.6 normally.
 
 ---
 
@@ -356,9 +525,36 @@ Display summary of auto-fetched data:
 
 **If fetch fails or token expired:** Show error and fall back to manual input below.
 
+### Instagram Reels / Posts — Instaloader Mode
+
+**If `INSTAGRAM_MODE = "instaloader"`:**
+
+Do NOT prompt for any metrics interactively. Run instaloader to scrape the specific post by shortcode extracted from `source_url`:
+
+```bash
+SHORTCODE=$(echo "${SOURCE_URL}" | sed 's|.*/reel/\([^/]*\)/.*|\1|; s|.*/p/\([^/]*\)/.*|\1|')
+mkdir -p /tmp/viral-analyze-ig
+python3 -m instaloader --no-pictures --no-videos --no-video-thumbnails \
+  --post-metadata-txt="" --dirname-pattern="/tmp/viral-analyze-ig/{profile}" \
+  -- -${SHORTCODE}
+```
+
+Parse the JSON output for: `video_view_count` (views), `edge_liked_by.count` (likes), `edge_media_to_comment.count` (comments).
+
+Display what was collected:
+```
+📊 Instagram (instaloader) for: "[title]"
+   Views: [N] | Likes: [N] | Comments: [N]
+   Eng Rate: [N%]
+   Note: reach, saves, follower gain not available via instaloader
+   ✓ Collected via instaloader
+```
+
+**Do NOT prompt for reach, saves, or follower growth.** Record only what instaloader returned. Move on.
+
 ### Instagram Reels / Posts — Manual Fallback
 
-**If `INSTAGRAM_ACCESS_TOKEN` is NOT set, or auto-fetch failed:**
+**Only runs if `INSTAGRAM_ACCESS_TOKEN` is NOT set AND `INSTAGRAM_MODE` is NOT `"instaloader"`, OR if Graph API auto-fetch failed:**
 
 ```
 📊 Instagram metrics for: "[title]"
@@ -846,11 +1042,13 @@ If pillar data insufficient: `   Not enough pillar data yet.`
 
 ---
 
-## Phase G.6: Top 10 Winner Ranking + Deep Analysis Offer
+## Phase G.6: Top 10 Ranking + Deep Analysis
 
-**Runs after Phase G.5**, using ALL analytics data (current + historical).
+**Two entry points:**
+- **Account Scan Mode:** Called directly from Phase B Step 4 (top 10 table already displayed — skip Steps 1 and 2, go straight to Step 3).
+- **Targeted Mode:** Called after Phase G.5 — run Steps 1 and 2 first to build the ranked list from `analytics.jsonl`.
 
-### Step 1: Build the All-Time Top 10 List
+### Step 1: Build the All-Time Top 10 List (Targeted Mode Only)
 
 Read ALL entries from `data/analytics/analytics.jsonl`. Filter to `is_winner: true`.
 
@@ -861,7 +1059,7 @@ For all winners, calculate a **composite score** to rank them:
 - Skip any component where the metric is null (normalize weight across remaining components)
 - Sort descending by composite score, take top 10
 
-### Step 2: Display Ranked Table
+### Step 2: Display Ranked Table (Targeted Mode Only)
 
 ```
 ════════════════════════════════════════
@@ -872,7 +1070,6 @@ For all winners, calculate a **composite score** to rank them:
 ────┼────────────────────────────────────┼───────────────────┼─────────┼───────┼───────┼──────────────────────────
  1  │ [title]                            │ [platform]        │ [N]     │ [N%]  │ [N]   │ [source_url or "no url"]
  2  │ [title]                            │ [platform]        │ [N]     │ [N%]  │ [N]   │ [source_url or "no url"]
- 3  │ [title]                            │ [platform]        │ [N]     │ [N%]  │ [N]   │ [source_url or "no url"]
 ...
 10  │ [title]                            │ [platform]        │ [N]     │ [N%]  │ [N]   │ [source_url or "no url"]
 
@@ -882,47 +1079,35 @@ For all winners, calculate a **composite score** to rank them:
 - If `source_url` is null for an entry, show "no url"
 - Show actual URL (full link, clickable in terminal) — not shortened
 
-### Step 3: Offer Manual Review or Auto-Analyze
+### Step 3: Dissect These Top Performers?
 
-Ask:
+Ask one combined question (whether in account scan mode or targeted mode):
+
 ```
-Want to go deeper on these winners?
+────────────────────────────────────────
+Want to dissect these top performers?
 
-  [M] Manual — I'll click the links and review them myself
-  [A] Auto-analyze — run transcript + visual hook analysis now
+  [3] Top 3  — transcript + visual hook analysis
+  [5] Top 5  — transcript + visual hook analysis
+  [10] All 10 — transcript + visual hook analysis
+  [M] Manual — I'll review the links myself
 
 →
 ```
 
-**If user chooses M (manual):**
-- Display: "Got it — links are above. Come back and run /viral:analyze --deep-analysis to run transcript + visual analysis anytime."
+Accept `3`, `5`, `10`, "top 3", "top 5", "all", or "m"/"manual". Default to `3` if user just presses Enter.
+
+**If [M] / manual:**
+- Display: "Links are above. Run `/viral:analyze --deep-analysis` anytime to run transcript + visual analysis."
 - Skip to Phase H.
 
-**If user chooses A (auto-analyze):**
+**If [3] / [5] / [10]:**
+- Slice the top 10 list to the chosen count.
+- Skip any entries where `source_url` is null (can't download without URL) — log skipped items.
+- Display: `"Analyzing [N] pieces — this may take a few minutes..."`
 - Proceed to Step 4.
 
-### Step 4: Select Depth
-
-Ask:
-```
-Analyze how many?
-
-  [3] Top 3
-  [5] Top 5
-  [10] All 10
-
-→
-```
-
-Accept `3`, `5`, `10`, or the words "top 3", "top 5", "all". Default to 3 if user just presses Enter.
-
-Slice the winner list to the chosen count. Skip any entries where:
-- `source_url` is null AND platform is not YouTube (can't auto-fetch without URL)
-- Platform is not YouTube or Instagram (TikTok/LinkedIn have no supported auto-fetch)
-
-Display: `"Analyzing [N] pieces — this may take a few minutes..."`
-
-### Step 5: Transcript + Visual Analysis
+### Step 4: Transcript + Visual Analysis
 
 For each selected winner, run the same analysis as `/viral:discover` Step 4 + Step 5:
 
@@ -964,7 +1149,7 @@ ffmpeg -i "/tmp/vc_winner_ig_[id].mp4" \
 
 **If download fails for any piece:** Log the error and continue to the next. Show all failures in the summary.
 
-### Step 6: Display Deep Analysis Per Winner
+### Step 4b: Display Deep Analysis Per Winner
 
 For each winner analyzed, display:
 
@@ -996,7 +1181,7 @@ WHY THIS WON:
   Proof: [N] views / [N%] engagement / +[N] subs
 ```
 
-### Step 7: Winner Analysis Summary
+### Step 5: Winner Analysis Summary
 
 After all pieces are analyzed, display:
 
