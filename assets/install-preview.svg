@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 380" width="620" height="380">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 620 360" width="620" height="360">
   <defs>
     <style>
       .bg { fill: #1e1e2e; }
@@ -11,17 +11,15 @@
       .white { fill: #cdd6f4; font-weight: bold; }
       .cyan { fill: #89dceb; }
       .green-text { fill: #a6e3a1; }
+      .blue-text { fill: #89b4fa; }
       .title-text { fill: #bac2de; font-family: 'SF Mono', monospace; font-size: 12px; }
       .prompt { fill: #6c7086; }
+      .logo { fill: #89b4fa; font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', monospace; font-size: 14px; }
     </style>
-    <linearGradient id="blue" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#60a5fa"/>
-      <stop offset="100%" style="stop-color:#3b82f6"/>
-    </linearGradient>
   </defs>
 
   <!-- Window -->
-  <rect class="bg" width="620" height="380" rx="10"/>
+  <rect class="bg" width="620" height="360" rx="10"/>
 
   <!-- Title bar -->
   <rect class="titlebar" width="620" height="36" rx="10"/>
@@ -39,101 +37,39 @@
   <text class="prompt" x="20" y="65">~ $</text>
   <text class="text" x="52" y="65">bash scripts/init-viral-command.sh</text>
 
-  <!-- GVB Pixel Logo — same rects as gvb-logo.svg, scaled 0.5x -->
-  <g fill="url(#blue)" transform="translate(18,72) scale(0.5)">
-    <!-- G -->
-    <rect x="20" y="20" width="20" height="20" rx="2"/>
-    <rect x="40" y="20" width="20" height="20" rx="2"/>
-    <rect x="60" y="20" width="20" height="20" rx="2"/>
-    <rect x="80" y="20" width="20" height="20" rx="2"/>
-    <rect x="100" y="20" width="20" height="20" rx="2"/>
-    <rect x="20" y="40" width="20" height="20" rx="2"/>
-    <rect x="40" y="40" width="20" height="20" rx="2"/>
-    <rect x="20" y="60" width="20" height="20" rx="2"/>
-    <rect x="100" y="60" width="20" height="20" rx="2"/>
-    <rect x="20" y="80" width="20" height="20" rx="2"/>
-    <rect x="60" y="80" width="20" height="20" rx="2"/>
-    <rect x="80" y="80" width="20" height="20" rx="2"/>
-    <rect x="100" y="80" width="20" height="20" rx="2"/>
-    <rect x="20" y="100" width="20" height="20" rx="2"/>
-    <rect x="40" y="100" width="20" height="20" rx="2"/>
-    <rect x="100" y="100" width="20" height="20" rx="2"/>
-    <rect x="20" y="120" width="20" height="20" rx="2"/>
-    <rect x="40" y="120" width="20" height="20" rx="2"/>
-    <rect x="60" y="120" width="20" height="20" rx="2"/>
-    <rect x="80" y="120" width="20" height="20" rx="2"/>
-    <rect x="100" y="120" width="20" height="20" rx="2"/>
-
-    <!-- V -->
-    <rect x="150" y="20" width="20" height="20" rx="2"/>
-    <rect x="170" y="20" width="20" height="20" rx="2"/>
-    <rect x="250" y="20" width="20" height="20" rx="2"/>
-    <rect x="270" y="20" width="20" height="20" rx="2"/>
-    <rect x="150" y="40" width="20" height="20" rx="2"/>
-    <rect x="170" y="40" width="20" height="20" rx="2"/>
-    <rect x="250" y="40" width="20" height="20" rx="2"/>
-    <rect x="270" y="40" width="20" height="20" rx="2"/>
-    <rect x="170" y="60" width="20" height="20" rx="2"/>
-    <rect x="190" y="60" width="20" height="20" rx="2"/>
-    <rect x="230" y="60" width="20" height="20" rx="2"/>
-    <rect x="250" y="60" width="20" height="20" rx="2"/>
-    <rect x="170" y="80" width="20" height="20" rx="2"/>
-    <rect x="190" y="80" width="20" height="20" rx="2"/>
-    <rect x="230" y="80" width="20" height="20" rx="2"/>
-    <rect x="250" y="80" width="20" height="20" rx="2"/>
-    <rect x="190" y="100" width="20" height="20" rx="2"/>
-    <rect x="210" y="100" width="20" height="20" rx="2"/>
-    <rect x="230" y="100" width="20" height="20" rx="2"/>
-    <rect x="200" y="120" width="20" height="20" rx="2"/>
-    <rect x="220" y="120" width="20" height="20" rx="2"/>
-
-    <!-- B -->
-    <rect x="320" y="20" width="20" height="20" rx="2"/>
-    <rect x="340" y="20" width="20" height="20" rx="2"/>
-    <rect x="360" y="20" width="20" height="20" rx="2"/>
-    <rect x="380" y="20" width="20" height="20" rx="2"/>
-    <rect x="320" y="40" width="20" height="20" rx="2"/>
-    <rect x="400" y="40" width="20" height="20" rx="2"/>
-    <rect x="320" y="60" width="20" height="20" rx="2"/>
-    <rect x="340" y="60" width="20" height="20" rx="2"/>
-    <rect x="360" y="60" width="20" height="20" rx="2"/>
-    <rect x="380" y="60" width="20" height="20" rx="2"/>
-    <rect x="320" y="80" width="20" height="20" rx="2"/>
-    <rect x="400" y="80" width="20" height="20" rx="2"/>
-    <rect x="320" y="100" width="20" height="20" rx="2"/>
-    <rect x="400" y="100" width="20" height="20" rx="2"/>
-    <rect x="320" y="120" width="20" height="20" rx="2"/>
-    <rect x="340" y="120" width="20" height="20" rx="2"/>
-    <rect x="360" y="120" width="20" height="20" rx="2"/>
-    <rect x="380" y="120" width="20" height="20" rx="2"/>
-  </g>
+  <!-- GVB ASCII Logo (basic ASCII chars only — renders everywhere) -->
+  <text class="logo" x="28" y="92" xml:space="preserve">   ______     ______</text>
+  <text class="logo" x="28" y="108" xml:space="preserve">  / ___\ \   / / __ )</text>
+  <text class="logo" x="28" y="124" xml:space="preserve"> | |  _ \ \ / /|  _ \</text>
+  <text class="logo" x="28" y="140" xml:space="preserve"> | |_| | \ V / | |_) |</text>
+  <text class="logo" x="28" y="156" xml:space="preserve">  \____|  \_/  |____/</text>
 
   <!-- Product name -->
-  <text class="white" x="28" y="160" font-family="'SF Mono',monospace" font-size="14" font-weight="bold">Go Viral Bitch</text>
-  <text class="dim" x="175" y="160" font-family="monospace" font-size="13">v0.1.0</text>
-  <text class="dim" x="28" y="178" font-family="monospace" font-size="12">Trainable social media coaching system</text>
-  <text class="dim" x="28" y="194" font-family="monospace" font-size="12">for Claude Code.</text>
+  <text class="white" x="28" y="184" font-family="'SF Mono',monospace" font-size="14" font-weight="bold">Go Viral Bitch</text>
+  <text class="dim" x="175" y="184" font-family="monospace" font-size="13">v0.1.0</text>
+  <text class="dim" x="28" y="202" font-family="monospace" font-size="12">Trainable social media coaching system</text>
+  <text class="dim" x="28" y="218" font-family="monospace" font-size="12">for Claude Code.</text>
 
   <!-- Status lines -->
-  <text class="green-text" x="28" y="225" font-family="monospace" font-size="13">&#10003;</text>
-  <text class="text" x="44" y="225" font-family="monospace" font-size="13">Directories ready</text>
+  <text class="green-text" x="28" y="249" font-family="monospace" font-size="13">&#10003;</text>
+  <text class="text" x="44" y="249" font-family="monospace" font-size="13">Directories ready</text>
 
-  <text class="green-text" x="28" y="243" font-family="monospace" font-size="13">&#10003;</text>
-  <text class="text" x="44" y="243" font-family="monospace" font-size="13">Data files initialized</text>
+  <text class="green-text" x="28" y="267" font-family="monospace" font-size="13">&#10003;</text>
+  <text class="text" x="44" y="267" font-family="monospace" font-size="13">Data files initialized</text>
 
-  <text class="green-text" x="28" y="261" font-family="monospace" font-size="13">&#10003;</text>
-  <text class="text" x="44" y="261" font-family="monospace" font-size="13">Python dependencies installed</text>
+  <text class="green-text" x="28" y="285" font-family="monospace" font-size="13">&#10003;</text>
+  <text class="text" x="44" y="285" font-family="monospace" font-size="13">Python dependencies installed</text>
 
-  <text class="green-text" x="28" y="279" font-family="monospace" font-size="13">&#10003;</text>
-  <text class="text" x="44" y="279" font-family="monospace" font-size="13">Installed Viral Command</text>
+  <text class="green-text" x="28" y="303" font-family="monospace" font-size="13">&#10003;</text>
+  <text class="text" x="44" y="303" font-family="monospace" font-size="13">Installed Viral Command</text>
 
   <!-- Done line -->
-  <text class="green-text" x="28" y="310" font-family="monospace" font-size="13" font-weight="bold">Done!</text>
-  <text class="text" x="70" y="310" font-family="monospace" font-size="13">Run</text>
-  <text class="cyan" x="100" y="310" font-family="monospace" font-size="13">/viral:setup</text>
-  <text class="text" x="203" y="310" font-family="monospace" font-size="13">to get started.</text>
+  <text class="green-text" x="28" y="330" font-family="monospace" font-size="13" font-weight="bold">Done!</text>
+  <text class="text" x="70" y="330" font-family="monospace" font-size="13">Run</text>
+  <text class="cyan" x="100" y="330" font-family="monospace" font-size="13">/viral:setup</text>
+  <text class="text" x="203" y="330" font-family="monospace" font-size="13">to get started.</text>
 
   <!-- Cursor -->
-  <text class="prompt" x="28" y="340">~ $</text>
-  <rect fill="#cdd6f4" x="60" y="329" width="8" height="14" opacity="0.7"/>
+  <text class="prompt" x="28" y="352">~ $</text>
+  <rect fill="#cdd6f4" x="60" y="341" width="8" height="14" opacity="0.7"/>
 </svg>
