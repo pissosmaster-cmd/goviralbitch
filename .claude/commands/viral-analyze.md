@@ -12,6 +12,8 @@ Parse for:
 - `--all` — Analyze all supported platforms (default if no platform flag — YouTube + Instagram)
 - `--content-id [ID]` — Analyze a specific script by ID
 - `--recent [N]` — Analyze last N published pieces (default: 5)
+- `--longform` — Analyze YouTube longform (5+ min) only; skip Shorts and Instagram
+- `--shorts` — Analyze YouTube Shorts + Instagram Reels only; skip longform
 - `--manual` — Non-interactive mode for cron/automation (skips prompts, analyzes all published content, runs full pipeline A-H without pauses)
 - `--deep-analysis` — Skip straight to Phase G.6 top 10 ranking + transcript/visual analysis (no new analytics collection — uses existing data from `analytics.jsonl`)
 
@@ -133,6 +135,36 @@ Based on flags:
 - If `--all` or no platform flag: scope = YouTube + Instagram (always)
 - Never include TikTok or LinkedIn — skip any scripts with `platform: tiktok` or `platform: linkedin` silently
 
+### Step 2.5: Determine Format Scope
+
+**Skip this step if `--manual` flag is present** (default to all formats in manual mode).
+
+**If `--longform` flag:** Set `FORMAT_SCOPE = "longform"`. Skip to Step 3.
+
+**If `--shorts` flag:** Set `FORMAT_SCOPE = "shorts"`. Skip to Step 3.
+
+**If neither flag:** Ask:
+
+```
+────────────────────────────────────────
+What are you analyzing this session?
+
+  [L] Longform  — YouTube videos (5+ min)
+  [S] Shorts    — YouTube Shorts + Instagram Reels
+  [A] All       — everything (longform + shorts + reels)
+
+→
+```
+
+Accept `l`/`longform`, `s`/`shorts`, `a`/`all`. Default to `A` if user presses Enter.
+
+Set `FORMAT_SCOPE`:
+- `"longform"` → pull YouTube longform only (duration ≥ 5 min); skip Shorts and Instagram
+- `"shorts"` → pull YouTube Shorts (< 60s) + Instagram Reels; skip YouTube longform
+- `"all"` → pull everything across both platforms (YouTube longform + Shorts + Instagram Reels)
+
+This scope is applied in Phase B Step 1 (YouTube channel scan) and Step 2 (Instagram scan) to filter which content is included in the top 10.
+
 ### Step 3: Determine API vs Interactive Mode
 
 For each platform in scope, classify:
@@ -230,6 +262,11 @@ For each video, store:
 - `source_url` — `https://www.youtube.com/watch?v={video_id}`
 - `engagement_rate` = `(likes + comments) / max(views, 1) × 100`
 
+**Apply FORMAT_SCOPE filter before storing:**
+- `FORMAT_SCOPE = "longform"` → keep only videos where `duration_seconds >= 300` (5+ min); discard Shorts
+- `FORMAT_SCOPE = "shorts"` → keep only videos where `duration_seconds < 60`; discard longform
+- `FORMAT_SCOPE = "all"` → keep everything
+
 Then fetch `subscribers_gained` per video via Analytics API (if OAuth token exists):
 
 ```bash
@@ -271,6 +308,8 @@ Show progress:
 ```
 
 #### Step 2: Instagram Account Scan (instaloader mode)
+
+**Skip this step entirely if `FORMAT_SCOPE = "longform"`** — Instagram is Reels only, not relevant for longform analysis.
 
 Get the user's Instagram handle from `data/agent-brain.json`:
 - Check `identity.instagram_handle` or `platforms.handles.instagram`
