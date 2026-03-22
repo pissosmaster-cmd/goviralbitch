@@ -61,7 +61,7 @@ python3 -c "import whisper; print('whisper OK')" 2>&1
 python3 -c "import instaloader; print('instaloader OK')" 2>&1
 ```
 
-- These power competitor research — transcribing their videos and scraping their Instagram content
+- These power competitor research — transcribing their videos locally and scraping their Instagram content
 - Show as [MISSING] not [OPTIONAL] if not installed
 - **Auto-install missing packages:** If either is missing, automatically install them:
 
@@ -76,7 +76,19 @@ pip3 install openai-whisper
 - After installing, re-check the import to confirm it worked
 - If install fails, show the error and suggest manual install
 
-### Step 3: CLI Tools
+### Step 3: ffmpeg (Required for Whisper)
+
+```bash
+which ffmpeg
+```
+
+- PASS if ffmpeg is found on PATH
+- FAIL if missing:
+  - macOS: `brew install ffmpeg`
+  - Linux: `apt install ffmpeg`
+- ffmpeg is required for local Whisper audio processing — transcription will fail without it
+
+### Step 4: CLI Tools
 
 ```bash
 yt-dlp --version
@@ -121,7 +133,7 @@ fi
 - If it still fails, show [NEEDS MANUAL FIX]: "Run `ln -sf {INSTA_BIN} ~/.local/bin/instaloader` and ensure ~/.local/bin is on your PATH"
 - Instaloader is important for downloading competitor Instagram content — don't skip it
 
-### Step 4: last30days Skill
+### Step 5: last30days Skill
 
 Check if the bundled skill exists:
 
@@ -132,7 +144,7 @@ ls skills/last30days/ 2>/dev/null
 - PASS if directory exists with files
 - FAIL if missing: "Run scripts/init-viral-command.sh first"
 
-### Step 5: Display Results
+### Step 6: Display Results
 
 ```
 ════════════════════════════════════════
@@ -141,8 +153,9 @@ DEPENDENCY CHECK
 
 Python 3.8+        [PASS/FAIL]  {version}
 pip packages        [PASS/FAIL]  {missing list if any}
-whisper             [PASS/MISSING]  {for competitor transcription}
+whisper             [PASS/MISSING]  {for local competitor transcription}
 instaloader         [PASS/MISSING/NEEDS FIX]  {for Instagram competitor scraping}
+ffmpeg              [PASS/FAIL]  {required for Whisper audio processing}
 yt-dlp CLI          [PASS/FAIL]  {version}
 instaloader CLI     [PASS/NEEDS FIX]  {version or PATH fix instructions}
 last30days skill    [PASS/FAIL]
@@ -150,7 +163,7 @@ last30days skill    [PASS/FAIL]
 ════════════════════════════════════════
 ```
 
-### Step 6: Handle Failures
+### Step 7: Handle Failures
 
 If any checks FAIL:
 - Show the install command for each failure
@@ -188,7 +201,6 @@ Determine which APIs are already set up vs need configuration.
 If platform already configured and `--reconfig` not passed:
 ```
 ✓ YouTube Data API — already configured (skip)
-✓ OpenAI API — already configured (skip)
 
 All APIs configured. Pass --reconfig to reconfigure.
 ```
@@ -241,58 +253,9 @@ Wait for user input.
 
 **If 'skip':**
 - Note: "YouTube API skipped — /viral:discover and /viral:analyze will have limited functionality"
-- Continue to next platform
+- Continue to next step
 
-### Step 3: OpenAI API (Competitor Research)
-
-**Required for:** Whisper API transcription of competitor videos. Powers the competitor recon pipeline — downloading and transcribing what's working for competitors so you can reverse-engineer winning content.
-
-**Auto-detect first:** Check if the key already exists in `.env`:
-
-```bash
-export $(grep -v '^#' .env | xargs) 2>/dev/null
-echo "$OPENAI_API_KEY"
-```
-
-- If `OPENAI_API_KEY` is set and non-empty: show "Found OpenAI API key in .env (sk-...{last 4 chars}). Testing..." and skip to verification.
-- If not set: prompt the user:
-
-Display:
-```
-────────────────────────────────────────
-OPENAI API — Competitor Research
-────────────────────────────────────────
-
-⚠️  RECOMMENDED — This powers competitor video transcription.
-
-Without this, you can't automatically transcribe competitor
-videos to reverse-engineer their hooks, structure, and angles.
-Local Whisper works but is significantly slower and less accurate.
-
-Cost: ~$0.006/min of audio (~$0.06 for a 10-min video)
-
-Get your key:
-1. Go to https://platform.openai.com/api-keys
-2. Click "Create new secret key"
-3. Copy the key (you won't see it again)
-
-Enter your OpenAI API key (or 'skip'):
-```
-
-Wait for user input.
-
-**Validation:**
-- Key should start with "sk-"
-- If format looks wrong: "That doesn't look like an OpenAI API key (expected format: sk-...). Try again or 'skip'."
-
-**If valid:**
-- Write to `.env` file: `OPENAI_API_KEY={key}`
-- Replace existing line if present
-
-**If 'skip':**
-- Note: "⚠️ OpenAI API skipped — competitor video transcription will fall back to local Whisper (slower, less accurate). You can add it later with /viral:setup --reconfig"
-
-### Step 4: Optional Platforms
+### Step 3: Optional Platforms
 
 Ask:
 ```
@@ -300,7 +263,8 @@ Ask:
 OPTIONAL PLATFORMS
 ────────────────────────────────────────
 
-The core system works best with YouTube + OpenAI.
+The core system only requires YOUTUBE_DATA_API_KEY.
+LLM analysis runs through Claude Code interactively.
 Additional APIs can enhance functionality in future versions.
 
 Configure any optional platform APIs? (yes / no)
@@ -334,21 +298,7 @@ Parse response:
 - If response contains `"error"` → FAIL, extract error message
 - If no response / timeout → FAIL, "Network issue or invalid key"
 
-### Step 2: OpenAI API Test
-
-Only if OpenAI key exists in `.env`:
-
-```bash
-export $(grep -v '^#' .env | xargs) 2>/dev/null
-curl -s https://api.openai.com/v1/models -H "Authorization: Bearer $OPENAI_API_KEY" | head -c 500
-```
-
-Parse response:
-- If response contains `"data"` → PASS
-- If response contains `"error"` → FAIL, extract error message
-- If no response → FAIL, "Network issue or invalid key"
-
-### Step 3: Display Verification Results
+### Step 2: Display Verification Results
 
 ```
 ════════════════════════════════════════
@@ -356,12 +306,11 @@ CONNECTION VERIFICATION
 ════════════════════════════════════════
 
 YouTube Data API    [PASS/FAIL]  {error detail if fail}
-OpenAI API          [PASS/FAIL]  {error detail if fail}
 
 ════════════════════════════════════════
 ```
 
-### Step 4: Handle Failures
+### Step 3: Handle Failures
 
 For each FAIL:
 - Show the specific error
@@ -379,7 +328,6 @@ Read `data/agent-brain.json`.
 
 Update `platforms.api_keys_configured` array:
 - Add `"youtube_data_v3"` if YouTube verification passed
-- Add `"openai"` if OpenAI verification passed
 - Remove any platform that was previously configured but now failed verification
 - Do NOT store actual API keys — only the platform identifier strings
 
@@ -405,6 +353,9 @@ Failed platforms:
 
 ────────────────────────────────────────
 
+LLM analysis runs through Claude Code interactively.
+Only YOUTUBE_DATA_API_KEY is required.
+
 Getting Started:
 1. /viral:onboard  — Set up your creator profile (identity, ICP, pillars)
 2. /viral:discover — Find trending topics scored against your ICP
@@ -412,7 +363,7 @@ Getting Started:
 
 Platform Notes:
 - YouTube: 10,000 quota units/day (~100 search queries or ~200 video lookups)
-- OpenAI: Whisper costs ~$0.006/min of audio transcription
+- Whisper: Runs locally via openai-whisper — no API key needed
 - Instaloader: Free, no API key needed (uses public IG endpoints)
 
 Tips:
@@ -728,5 +679,5 @@ Run /viral:setup --analytics anytime to add or reconfigure connections.
 3. **Don't retry indefinitely** — if a key fails twice, suggest the user check it manually and move on.
 4. **Read before write** — always read `.env` and `agent-brain.json` before modifying. Preserve existing content.
 5. **One thing at a time** — don't overwhelm the user. One platform, one key, one verification at a time.
-6. **Be helpful on errors** — if YouTube says "quotaExceeded", explain what that means. If OpenAI says "invalid_api_key", say "Double-check the key at platform.openai.com."
+6. **Be helpful on errors** — if YouTube says "quotaExceeded", explain what that means.
 7. **Phase E is always optional** — "later" is a valid answer at any point in Phase E. Never pressure the user to connect analytics.
