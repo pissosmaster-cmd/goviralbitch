@@ -133,49 +133,40 @@ def _search_reddit(
     depth: str,
     mock: bool,
 ) -> tuple:
-    """Search Reddit via OpenAI (runs in thread).
+    """Search Reddit via direct Reddit JSON API (runs in thread).
 
     Returns:
-        Tuple of (reddit_items, raw_openai, error)
+        Tuple of (reddit_items, raw_reddit, error)
     """
-    raw_openai = None
+    reddit_items = []
+    raw_reddit = None
     reddit_error = None
 
     if mock:
-        raw_openai = load_fixture("openai_sample.json")
+        raw_reddit = load_fixture("openai_sample.json")
+        reddit_items = openai_reddit.parse_reddit_response(raw_reddit or {})
     else:
         try:
-            raw_openai = openai_reddit.search_reddit(
-                config["OPENAI_API_KEY"],
-                selected_models["openai"],
+            reddit_items = openai_reddit.search_reddit(
                 topic,
                 from_date,
                 to_date,
                 depth=depth,
             )
-        except http.HTTPError as e:
-            raw_openai = {"error": str(e)}
-            reddit_error = f"API error: {e}"
+            raw_reddit = reddit_items  # For debug output
         except Exception as e:
-            raw_openai = {"error": str(e)}
             reddit_error = f"{type(e).__name__}: {e}"
-
-    # Parse response
-    reddit_items = openai_reddit.parse_reddit_response(raw_openai or {})
 
     # Quick retry with simpler query if few results
     if len(reddit_items) < 5 and not mock and not reddit_error:
         core = openai_reddit._extract_core_subject(topic)
         if core.lower() != topic.lower():
             try:
-                retry_raw = openai_reddit.search_reddit(
-                    config["OPENAI_API_KEY"],
-                    selected_models["openai"],
+                retry_items = openai_reddit.search_reddit(
                     core,
                     from_date, to_date,
                     depth=depth,
                 )
-                retry_items = openai_reddit.parse_reddit_response(retry_raw)
                 # Add items not already found (by URL)
                 existing_urls = {item.get("url") for item in reddit_items}
                 for item in retry_items:
@@ -188,14 +179,11 @@ def _search_reddit(
     if len(reddit_items) < 3 and not mock and not reddit_error:
         sub_query = openai_reddit._build_subreddit_query(topic)
         try:
-            sub_raw = openai_reddit.search_reddit(
-                config["OPENAI_API_KEY"],
-                selected_models["openai"],
+            sub_items = openai_reddit.search_reddit(
                 sub_query,
                 from_date, to_date,
                 depth=depth,
             )
-            sub_items = openai_reddit.parse_reddit_response(sub_raw)
             existing_urls = {item.get("url") for item in reddit_items}
             for item in sub_items:
                 if item.get("url") not in existing_urls:
@@ -203,7 +191,7 @@ def _search_reddit(
         except Exception:
             pass
 
-    return reddit_items, raw_openai, reddit_error
+    return reddit_items, raw_reddit, reddit_error
 
 
 def _search_x(
