@@ -286,16 +286,7 @@ if [ $? -ne 0 ]; then
   fi
 fi
 
-# 4. Transcribe with OpenAI Whisper API (preferred — faster, more reliable)
-curl -s https://api.openai.com/v1/audio/transcriptions \
-  -H "Authorization: Bearer ${OPENAI_API_KEY}" \
-  -F file="@/tmp/viral-discover-yt/${VIDEO_ID}.mp3" \
-  -F model="whisper-1" \
-  -F response_format="text"
-```
-
-If OpenAI API unavailable, fall back to local whisper:
-```bash
+# 4. Transcribe with local Whisper (no API key needed)
 whisper "/tmp/viral-discover-yt/${VIDEO_ID}.mp3" --model base --output_format txt --output_dir /tmp/viral-discover-yt/
 ```
 
@@ -329,7 +320,8 @@ if [ $? -ne 0 ]; then
   # Proceed with transcript-only analysis (graceful degradation — no visual)
 fi
 
-# 4. Then use OpenAI Whisper API or local whisper (same as YouTube above)
+# 4. Transcribe with local Whisper (no API key needed — same as YouTube above)
+whisper "/tmp/viral-discover-ig/${HANDLE}/${SHORTCODE}.mp3" --model base --output_format txt --output_dir "/tmp/viral-discover-ig/${HANDLE}/"
 ```
 
 **Visual analysis — read frames directly (no separate API key needed):**
@@ -521,7 +513,7 @@ For each selected hook, build a swipe entry object matching `schemas/swipe-hook.
 }
 ```
 
-**If visual analysis was unavailable** for a video (frame extraction failed or `ANTHROPIC_API_KEY` not set), set `visual_hook.available = false` and all other `visual_hook` fields to `null`.
+**If visual analysis was unavailable** for a video (frame extraction failed), set `visual_hook.available = false` and all other `visual_hook` fields to `null`.
 
 **Fill `engagement` with actual stats** from the Step 3 ranking table (views, likes, comments, engagement_rate).
 
@@ -548,6 +540,136 @@ These hooks will appear as inspiration options next time you run:
 - Idempotent: if the same hook text already exists in today's file (check existing entries), skip it and note "already saved"
 - Do NOT save hooks from non-transcribed content (titles/captions only) — this step is transcript-exclusive
 
+
+### Step 7: Competitor Recon — Skeleton Ripper (Instagram Competitors)
+
+**This step runs automatically for any Instagram competitors listed in the agent brain.** It uses the ReconPipeline to download Instagram reels, transcribe them with local Whisper, and extract structural "skeletons" — hooks, pacing, proof methods, and CTAs — for pattern synthesis.
+
+**Skip this step if there are no Instagram competitors in `competitors[]`, or if `DISCOVERY_MODE = keyword`.**
+
+After the swipe save (Step 6), ask:
+
+```
+Want to run deep skeleton analysis on Instagram competitors?
+This downloads reels, transcribes with local Whisper, and extracts structural patterns.
+
+Instagram competitors: {list handles from competitors[] where platform == "Instagram"}
+
+(yes/no):
+```
+
+**If no:** Continue to Phase 1.5 or Phase 2.
+
+**If yes:**
+
+#### Phase 1: Scrape & Transcribe
+
+Run the pipeline's first phase to download competitor videos and transcribe them:
+
+```bash
+cd /Users/cartersmith/AntiGravity/goviralbitch && python3 -c "
+from recon.skeleton_ripper.pipeline import ReconPipeline, create_job_config
+config = create_job_config(
+    usernames=[{comma-separated quoted IG handles from competitors[]}],
+    videos_per_creator=3,
+    platform='instagram',
+)
+pipeline = ReconPipeline()
+output_dir = pipeline.scrape_and_transcribe(config)
+print(f'OUTPUT_DIR={output_dir}')
+"
+```
+
+Capture the `OUTPUT_DIR` from the output. If Phase 1 fails, log the error and skip the remaining skeleton ripper phases — continue to Phase 1.5 or Phase 2.
+
+#### Phase 2: Skeleton Extraction (Claude Inline)
+
+Read the extraction prompt and transcripts produced by Phase 1:
+
+1. Read `{output_dir}/extraction-prompt.md` for instructions
+2. Read `{output_dir}/transcripts.json` for the raw transcripts
+
+For each transcript, extract:
+- **hook**: The opening line or attention-grabbing pattern
+- **structure**: Section-by-section breakdown of the content
+- **key_points**: Main arguments or insights delivered
+- **proof_method**: How claims are supported (data, story, authority, social proof)
+- **cta_mention**: Any call-to-action used
+- **pacing**: fast / medium / slow
+- **visual_approach**: Description of visual style if discernible
+
+Write the results as a JSON array to `{output_dir}/extraction-results.json`. Each element should match the skeleton schema from the extraction prompt.
+
+#### Phase 3: Aggregate
+
+Run the pipeline's second phase to aggregate extracted skeletons:
+
+```bash
+cd /Users/cartersmith/AntiGravity/goviralbitch && python3 -c "
+from recon.skeleton_ripper.pipeline import ReconPipeline
+pipeline = ReconPipeline()
+pipeline.aggregate_and_finish('{output_dir}')
+print('Aggregation complete. Synthesis prompt ready.')
+"
+```
+
+If aggregation fails, log the error and skip remaining skeleton ripper phases.
+
+#### Phase 4: Pattern Synthesis (Claude Inline)
+
+Read the synthesis prompt and aggregated skeletons:
+
+1. Read `{output_dir}/synthesis-prompt.md` for instructions
+2. Read `{output_dir}/skeletons.json` for the aggregated skeleton data
+
+Synthesize patterns into:
+- **templates**: Reusable content structures extracted from what works
+- **quick_wins**: Immediately actionable insights
+- **warnings**: Patterns to avoid
+
+Write results to `{output_dir}/synthesis-results.json`.
+
+#### Phase 5: Finalize
+
+Run the pipeline's third phase to save everything:
+
+```bash
+cd /Users/cartersmith/AntiGravity/goviralbitch && python3 -c "
+from recon.skeleton_ripper.pipeline import ReconPipeline
+pipeline = ReconPipeline()
+report = pipeline.finalize('{output_dir}')
+print('Recon complete.')
+print(f'Report: {report[\"report\"]}')
+print(f'Skeletons: {report[\"skeletons\"]}')
+print(f'Synthesis: {report[\"synthesis\"]}')
+"
+```
+
+Display a summary of the skeleton ripper results:
+
+```
+═══════════════════════════════════════════════════
+SKELETON RIPPER — COMPLETE
+═══════════════════════════════════════════════════
+
+Competitors analyzed: {N} Instagram accounts
+Skeletons extracted: {N}
+Output: {output_dir}
+
+Key patterns found:
+- {template 1 summary}
+- {template 2 summary}
+
+Quick wins:
+- {quick win 1}
+- {quick win 2}
+
+Warnings:
+- {warning 1}
+
+Full report: {report path}
+═══════════════════════════════════════════════════
+```
 ---
 
 ## Phase 1.5: Keyword Search Discovery
@@ -858,6 +980,11 @@ Competitors analyzed: {N}
   Instagram: {list handles} — {N} posts pulled
 Transcriptions done: {N} ({N} verbal + {N} visual)
 
+
+{If skeleton ripper ran:}
+Skeleton Ripper: {N} skeletons extracted from {N} IG accounts
+  Report: {report path}
+
 {If keyword mode or both:}
 Keyword search results:
   YouTube Search: {N} results across {N} queries
@@ -957,3 +1084,4 @@ To avoid re-scraping within the same day:
 - **Graceful degradation** — if Instagram scraping fails, continue with YouTube only. If no API keys, explain what's missing.
 - **Clean up temp files** after transcription (`/tmp/viral-discover-*`)
 - **Maximum 3 trend queries** per run (API rate limits)
+- **No external LLM API calls** — all analysis (skeleton extraction, pattern synthesis, transcript dissection) is done inline by Claude Code. No OpenAI, Anthropic, Google, or other provider API keys are needed for analysis.
