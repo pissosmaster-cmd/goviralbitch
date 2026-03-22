@@ -3,9 +3,9 @@ flask>=2.0.0
 requests>=2.25.0
 yt-dlp>=2023.0.0
 
-# Optional: Competitor recon (scraping + transcription)
+# Competitor recon (scraping + transcription)
 # instaloader>=4.10        # Instagram scraping — pip3 install instaloader
-# openai-whisper>=20231117 # Local transcription fallback — pip3 install openai-whisper (requires ffmpeg)
+openai-whisper>=20231117   # Local transcription — requires ffmpeg
 
 # PDF generation
 reportlab>=4.0.0

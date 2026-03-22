@@ -32,10 +32,6 @@ class ReconConfig:
     competitors: List[Competitor]
     ig_username: Optional[str] = None
     ig_password: Optional[str] = None
-    openai_api_key: Optional[str] = None
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
-    transcribe_provider: str = "openai"
     whisper_model: str = "small.en"
 
 
@@ -80,7 +76,6 @@ def load_credentials() -> Dict[str, str]:
     env_map = {
         "IG_USERNAME": "ig_username",
         "IG_PASSWORD": "ig_password",
-        "OPENAI_API_KEY": "openai_api_key",
         "ANTHROPIC_API_KEY": "anthropic_api_key",
         "GOOGLE_API_KEY": "google_api_key",
     }
@@ -111,10 +106,6 @@ def load_config() -> ReconConfig:
         competitors=competitors,
         ig_username=creds.get("ig_username") or creds.get("IG_USERNAME"),
         ig_password=creds.get("ig_password") or creds.get("IG_PASSWORD"),
-        openai_api_key=creds.get("openai_api_key") or creds.get("OPENAI_API_KEY"),
-        llm_provider=creds.get("llm_provider", "openai"),
-        llm_model=creds.get("llm_model", "gpt-4o-mini"),
-        transcribe_provider=creds.get("transcribe_provider", "openai"),
         whisper_model=creds.get("whisper_model", "small.en"),
     )
 
