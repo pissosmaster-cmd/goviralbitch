@@ -1,15 +1,17 @@
 """
-Pattern synthesizer for Content Skeleton Ripper.
-Ported from ReelRecon — imports adjusted.
+Pattern synthesizer for Content Skeleton Ripper — file-based I/O.
+
+Writes skeletons + prompt to disk for Claude Code to process,
+then reads back the synthesis results. No direct LLM dependency.
 """
 
-import traceback
+import json
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from .llm_client import LLMClient
-from .prompts import get_synthesis_prompts
+from .prompts import build_synthesis_prompt
 from .aggregator import AggregatedData
 from recon.utils.logger import get_logger
 
@@ -30,43 +32,72 @@ class SynthesisResult:
 
 
 class PatternSynthesizer:
-    def __init__(self, llm_client: LLMClient, timeout: int = 180):
-        self.llm_client = llm_client
-        self.timeout = timeout
+    """Prepare synthesis prompts and load results via the filesystem."""
 
-    def synthesize(self, data: AggregatedData, retry_on_failure: bool = True) -> SynthesisResult:
-        if not data.skeletons:
-            return SynthesisResult(success=False, error="No skeleton data to synthesize")
+    def prepare_synthesis(self, skeletons: list[dict], output_dir: str) -> str:
+        """Write skeletons + prompt for Claude to process.
 
-        try:
-            system_prompt, user_prompt = get_synthesis_prompts(data.skeletons)
-            response = self.llm_client.chat(system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.7)
-            result = self._parse_response(response)
-            result.model_used = f"{self.llm_client.provider}/{self.llm_client.model}"
-            result.synthesized_at = datetime.utcnow().isoformat()
-            return result
+        Creates:
+          - <output_dir>/synthesis-prompt.md — system + user prompt
+          - <output_dir>/skeletons.json      — raw skeleton data
 
-        except Exception as e:
-            logger.error("SYNTH", f"Synthesis failed: {e}")
-            if retry_on_failure:
-                try:
-                    system_prompt, user_prompt = get_synthesis_prompts(data.skeletons)
-                    response = self.llm_client.chat(system_prompt=system_prompt, user_prompt=user_prompt, temperature=0.7)
-                    result = self._parse_response(response)
-                    result.model_used = f"{self.llm_client.provider}/{self.llm_client.model}"
-                    result.synthesized_at = datetime.utcnow().isoformat()
-                    return result
-                except Exception as retry_error:
-                    logger.error("SYNTH", f"Retry failed: {retry_error}")
+        Returns the path to the prompt file.
+        """
+        os.makedirs(output_dir, exist_ok=True)
 
-            return SynthesisResult(success=False, error=str(e))
+        system, user = build_synthesis_prompt(skeletons)
+        prompt_path = os.path.join(output_dir, "synthesis-prompt.md")
+        data_path = os.path.join(output_dir, "skeletons.json")
 
-    def _parse_response(self, response: str) -> SynthesisResult:
-        result = SynthesisResult(success=True, analysis=response.strip())
-        result.templates = self._extract_templates(response)
-        result.quick_wins = self._extract_section_items(response, "Quick Wins")
-        result.warnings = self._extract_section_items(response, "Warnings")
+        with open(prompt_path, "w") as f:
+            f.write(f"## System\n{system}\n\n## Task\n{user}")
+        with open(data_path, "w") as f:
+            json.dump(skeletons, f, indent=2)
+
+        logger.info("SYNTH", f"Wrote prompt to {prompt_path} ({len(skeletons)} skeletons)")
+        return prompt_path
+
+    def load_synthesis_results(self, output_dir: str) -> SynthesisResult:
+        """Read Claude's synthesis output from file.
+
+        Expects <output_dir>/synthesis-results.json with a JSON object
+        containing at minimum an "analysis" key with the full text output.
+        Optionally may contain pre-parsed "templates", "quick_wins", and
+        "warnings" arrays. If those are absent the raw analysis text is
+        parsed to extract them.
+        """
+        results_path = os.path.join(output_dir, "synthesis-results.json")
+        with open(results_path) as f:
+            data = json.load(f)
+
+        # Support both structured and raw-text result formats
+        if isinstance(data, str):
+            analysis_text = data
+            pre_parsed = {}
+        elif isinstance(data, dict):
+            analysis_text = data.get("analysis", "")
+            pre_parsed = data
+        else:
+            return SynthesisResult(success=False, error=f"Unexpected result format in {results_path}")
+
+        result = SynthesisResult(
+            success=True,
+            analysis=analysis_text.strip(),
+            synthesized_at=datetime.utcnow().isoformat(),
+        )
+
+        # Use pre-parsed fields if the results file has them,
+        # otherwise fall back to text extraction.
+        result.templates = pre_parsed.get("templates") or self._extract_templates(analysis_text)
+        result.quick_wins = pre_parsed.get("quick_wins") or self._extract_section_items(analysis_text, "Quick Wins")
+        result.warnings = pre_parsed.get("warnings") or self._extract_section_items(analysis_text, "Warnings")
+
+        logger.info("SYNTH", f"Loaded synthesis results from {results_path}")
         return result
+
+    # ------------------------------------------------------------------
+    # Text-parsing helpers (kept from original for raw-text results)
+    # ------------------------------------------------------------------
 
     def _extract_templates(self, text: str) -> list[dict]:
         templates = []

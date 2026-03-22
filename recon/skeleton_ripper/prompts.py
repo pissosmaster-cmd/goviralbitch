@@ -1,7 +1,12 @@
-"""
-Prompt templates for the Content Skeleton Ripper.
-Copied from ReelRecon — unchanged.
-"""
+"""Prompt templates for skeleton extraction and pattern synthesis.
+These are used by Claude Code commands to do LLM analysis inline."""
+
+import json
+
+
+# ---------------------------------------------------------------------------
+# Extraction prompt
+# ---------------------------------------------------------------------------
 
 SKELETON_EXTRACT_BATCH_PROMPT = """Extract the content skeleton from each of these viral video transcripts.
 
@@ -31,7 +36,7 @@ TRANSCRIPTS TO ANALYZE:
 """
 
 
-def format_batch_transcripts(transcripts: list[dict]) -> str:
+def _format_batch_transcripts(transcripts: list[dict]) -> str:
     formatted = []
     for t in transcripts:
         views_str = f"{t.get('views', 0):,}" if t.get('views') else 'N/A'
@@ -41,10 +46,20 @@ def format_batch_transcripts(transcripts: list[dict]) -> str:
     return "\n\n".join(formatted)
 
 
-def get_extraction_prompt(transcripts: list[dict]) -> str:
-    batch_text = format_batch_transcripts(transcripts)
+def build_extraction_prompt(transcripts: list[dict]) -> str:
+    """Build the prompt for skeleton extraction from transcripts.
+    Returns a prompt string for Claude to analyze."""
+    batch_text = _format_batch_transcripts(transcripts)
     return SKELETON_EXTRACT_BATCH_PROMPT.format(batch_transcripts=batch_text)
 
+
+# Backward-compat alias (used by pipeline.py until it is refactored)
+get_extraction_prompt = build_extraction_prompt
+
+
+# ---------------------------------------------------------------------------
+# Synthesis prompts
+# ---------------------------------------------------------------------------
 
 SKELETON_SYNTHESIS_SYSTEM_PROMPT = """You are a content skeleton extractor. Your job is to reverse-engineer what WORKS in viral content and create fill-in-the-blank templates that other creators can immediately use.
 
@@ -151,8 +166,8 @@ Create fill-in-the-blank templates I can immediately use for my own content. Fol
 Remember: Extract what WORKS. I want to model their success, not critique their content."""
 
 
-def format_creator_summary(skeletons: list[dict]) -> str:
-    creators = {}
+def _format_creator_summary(skeletons: list[dict]) -> str:
+    creators: dict[str, dict] = {}
     for s in skeletons:
         username = s.get('creator_username', 'unknown')
         if username not in creators:
@@ -167,17 +182,26 @@ def format_creator_summary(skeletons: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def get_synthesis_prompts(skeletons: list[dict]) -> tuple[str, str]:
-    import json
+def build_synthesis_prompt(skeletons: list[dict]) -> tuple[str, str]:
+    """Build system + user prompts for pattern synthesis.
+    Returns (system_prompt, user_prompt) tuple."""
     creators = set(s.get('creator_username', 'unknown') for s in skeletons)
     user_prompt = SKELETON_SYNTHESIS_USER_PROMPT.format(
         skeleton_count=len(skeletons),
         creator_count=len(creators),
-        creator_summary=format_creator_summary(skeletons),
+        creator_summary=_format_creator_summary(skeletons),
         skeletons_json=json.dumps(skeletons, indent=2)
     )
     return SKELETON_SYNTHESIS_SYSTEM_PROMPT, user_prompt
 
+
+# Backward-compat alias (used by pipeline.py until it is refactored)
+get_synthesis_prompts = build_synthesis_prompt
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
 
 REQUIRED_SKELETON_FIELDS = [
     'video_id', 'hook', 'hook_technique', 'value', 'value_structure', 'cta', 'cta_type'
