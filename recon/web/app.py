@@ -326,10 +326,7 @@ def api_get_settings():
     return jsonify({
         "ig_username": creds.get("ig_username", ""),
         "ig_password_set": bool(creds.get("ig_password")),
-        "openai_api_key_set": bool(creds.get("openai_api_key")),
-        "anthropic_api_key_set": bool(creds.get("anthropic_api_key")),
-        "llm_provider": creds.get("llm_provider", "openai"),
-        "llm_model": creds.get("llm_model", "gpt-4o-mini"),
+        "llm_note": "LLM analysis runs through Claude Code interactively",
     })
 
 
@@ -340,8 +337,7 @@ def api_save_settings():
     creds = load_credentials()
 
     # Update only provided fields
-    for key in ["ig_username", "ig_password", "openai_api_key", "anthropic_api_key",
-                "google_api_key", "llm_provider", "llm_model", "transcribe_provider"]:
+    for key in ["ig_username", "ig_password"]:
         if key in data and data[key]:
             creds[key] = data[key]
 
