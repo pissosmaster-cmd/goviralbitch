@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from recon.config import load_config, load_competitors, save_credentials, load_credentials
 from recon.scraper.instagram import InstaClient
 from recon.scraper.youtube import get_channel_videos, save_channel_data
-from recon.scraper.downloader import transcribe_video_openai, WHISPER_AVAILABLE
+from recon.scraper.downloader import transcribe_video
 from recon.skeleton_ripper import (
     SkeletonRipperPipeline, create_job_config, JobProgress, JobStatus,
     get_available_providers
@@ -242,8 +242,6 @@ def api_run_analysis():
     data = request.get_json()
     usernames = data.get("usernames", [])
     videos_per_creator = data.get("videos_per_creator", 3)
-    llm_provider = data.get("llm_provider", "openai")
-    llm_model = data.get("llm_model", "gpt-4o-mini")
 
     if not usernames:
         return jsonify({"error": "No usernames provided"}), 400
@@ -261,8 +259,6 @@ def api_run_analysis():
             config = create_job_config(
                 usernames=usernames,
                 videos_per_creator=videos_per_creator,
-                llm_provider=llm_provider,
-                llm_model=llm_model,
             )
 
             pipeline = SkeletonRipperPipeline()
@@ -279,17 +275,12 @@ def api_run_analysis():
                     "errors": progress.errors,
                 }
 
-            result = pipeline.run(config, on_progress=on_progress)
+            output_dir = pipeline.scrape_and_transcribe(config, on_progress=on_progress)
 
-            active_jobs[job_id]["status"] = "complete" if result.success else "error"
-            active_jobs[job_id]["message"] = (
-                f"Done: {len(result.skeletons)} skeletons extracted"
-                if result.success else f"Failed: {', '.join(result.progress.errors)}"
-            )
+            active_jobs[job_id]["status"] = "complete"
+            active_jobs[job_id]["message"] = "Phase 1 complete — transcripts + extraction prompt ready"
             active_jobs[job_id]["result"] = {
-                "report_path": result.report_path,
-                "skeletons_path": result.skeletons_path,
-                "skeleton_count": len(result.skeletons),
+                "output_dir": output_dir,
             }
 
         except Exception as e:

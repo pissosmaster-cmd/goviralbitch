@@ -1,6 +1,14 @@
 """
 Main pipeline orchestration for Content Skeleton Ripper.
 Ported from ReelRecon — uses InstaClient instead of cookie-based session.
+
+Split into three data-only phases:
+  1. scrape_and_transcribe  — download videos, transcribe with local Whisper,
+                              write transcripts + extraction prompt to disk
+  2. aggregate_and_finish   — read extraction results (written by Claude),
+                              aggregate patterns, write synthesis prompt
+  3. finalize               — read synthesis results (written by Claude),
+                              merge into data/recon/
 """
 
 import os
@@ -15,7 +23,6 @@ from typing import Optional, Callable
 from enum import Enum
 
 from .cache import TranscriptCache, is_valid_transcript
-from .llm_client import LLMClient
 from .extractor import BatchedExtractor
 from .aggregator import SkeletonAggregator, AggregatedData
 from .synthesizer import PatternSynthesizer, SynthesisResult, generate_report
@@ -24,11 +31,9 @@ from recon.utils.logger import get_logger
 # Import recon scrapers (replaces ReelRecon's cookie-based scraper)
 from recon.scraper.instagram import InstaClient
 from recon.scraper.downloader import (
-    transcribe_video_openai,
-    transcribe_video_local,
+    transcribe_video,
     load_whisper_model,
     download_direct,
-    WHISPER_AVAILABLE,
 )
 from recon.config import load_config
 
@@ -77,12 +82,7 @@ class JobConfig:
     usernames: list[str]
     videos_per_creator: int = 3
     platform: str = "instagram"
-    llm_provider: str = "openai"
-    llm_model: str = "gpt-4o-mini"
-    min_valid_ratio: float = 0.6
-    transcribe_provider: str = "openai"
     whisper_model: str = "small.en"
-    openai_api_key: Optional[str] = None
 
 
 @dataclass
@@ -91,6 +91,7 @@ class JobResult:
     success: bool
     config: JobConfig
     progress: JobProgress
+    output_dir: Optional[str] = None
     skeletons: list[dict] = field(default_factory=list)
     aggregated: Optional[AggregatedData] = None
     synthesis: Optional[SynthesisResult] = None
@@ -99,9 +100,13 @@ class JobResult:
     synthesis_path: Optional[str] = None
 
 
-class SkeletonRipperPipeline:
+class ReconPipeline:
     """
-    Main pipeline — uses InstaClient (Instaloader) for IG scraping.
+    Main pipeline — three data-only phases, no LLM calls.
+
+    Phase 1: scrape_and_transcribe  — produces transcripts.json + extraction-prompt.md
+    Phase 2: aggregate_and_finish   — reads extraction-results.json, produces synthesis-prompt.md
+    Phase 3: finalize               — reads synthesis-results.json, saves final report
     """
 
     def __init__(self, base_dir: Optional[str] = None):
@@ -111,27 +116,39 @@ class SkeletonRipperPipeline:
         self.output_dir = RECON_DATA_DIR / 'reports'
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cache = TranscriptCache()
-        logger.info("PIPELINE", f"SkeletonRipperPipeline initialized")
+        logger.info("PIPELINE", "ReconPipeline initialized")
 
-    def run(self, config: JobConfig, on_progress: Optional[Callable[[JobProgress], None]] = None) -> JobResult:
+    # ------------------------------------------------------------------
+    # Phase 1 — Scrape + Transcribe
+    # ------------------------------------------------------------------
+
+    def scrape_and_transcribe(
+        self,
+        config: JobConfig,
+        on_progress: Optional[Callable[[JobProgress], None]] = None,
+    ) -> str:
+        """Phase 1: Download videos, transcribe with local Whisper, save to output_dir.
+
+        Returns output_dir path with transcripts.json and extraction-prompt.md ready.
+        """
         job_id = f"sr_{uuid.uuid4().hex[:8]}"
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        output_dir = str(self.output_dir / f"{timestamp}_{job_id}")
+        os.makedirs(output_dir, exist_ok=True)
+
         progress = JobProgress(
-            status=JobStatus.PENDING,
+            status=JobStatus.SCRAPING,
+            phase="Scraping videos...",
             started_at=datetime.utcnow().isoformat(),
             total_target=len(config.usernames) * config.videos_per_creator,
-            total_creators=len(config.usernames)
+            total_creators=len(config.usernames),
         )
-        result = JobResult(job_id=job_id, success=False, config=config, progress=progress)
+        self._notify(on_progress, progress)
 
         try:
-            llm_client = LLMClient(provider=config.llm_provider, model=config.llm_model)
-
-            # Stage 1: Scrape and transcribe
-            progress.status = JobStatus.SCRAPING
-            progress.phase = "Scraping videos..."
-            self._notify(on_progress, progress)
-
-            transcripts = self._scrape_and_transcribe(config=config, progress=progress, on_progress=on_progress)
+            transcripts = self._scrape_and_transcribe(
+                config=config, progress=progress, on_progress=on_progress,
+            )
 
             valid_count = sum(1 for t in transcripts if is_valid_transcript(t.get('transcript', '')))
             progress.valid_transcripts = valid_count
@@ -141,75 +158,203 @@ class SkeletonRipperPipeline:
 
             valid_transcripts = [t for t in transcripts if is_valid_transcript(t.get('transcript', ''))]
 
-            # Stage 2: Extraction
+            # Write transcripts + extraction prompt via extractor
             progress.status = JobStatus.EXTRACTING
-            progress.phase = "Extracting content skeletons..."
+            progress.phase = "Preparing extraction prompt..."
             self._notify(on_progress, progress)
 
-            extractor = BatchedExtractor(llm_client)
-            extraction_result = extractor.extract_all(
-                valid_transcripts,
-                on_progress=lambda done, total, batch, total_batches: self._update_extraction_progress(
-                    progress, done, total, batch, total_batches, on_progress
-                )
-            )
-            result.skeletons = extraction_result.successful
-            progress.skeletons_extracted = len(extraction_result.successful)
+            extractor = BatchedExtractor()
+            extractor.prepare_extraction(valid_transcripts, output_dir)
 
-            if not result.skeletons:
-                raise ValueError("No skeletons extracted successfully")
-
-            # Stage 3: Aggregation
-            progress.status = JobStatus.AGGREGATING
-            progress.phase = "Aggregating patterns..."
+            progress.phase = f"Phase 1 complete — {len(valid_transcripts)} transcripts ready"
+            progress.message = f"Extraction prompt written to {output_dir}"
             self._notify(on_progress, progress)
 
-            aggregator = SkeletonAggregator()
-            result.aggregated = aggregator.aggregate(result.skeletons)
-
-            # Stage 4: Synthesis
-            progress.status = JobStatus.SYNTHESIZING
-            progress.phase = "Synthesizing content strategy..."
-            self._notify(on_progress, progress)
-
-            synthesizer = PatternSynthesizer(llm_client)
-            result.synthesis = synthesizer.synthesize(result.aggregated)
-
-            # Stage 5: Output
-            output_paths = self._save_outputs(job_id, config, result)
-            result.report_path = output_paths.get('report')
-            result.skeletons_path = output_paths.get('skeletons')
-            result.synthesis_path = output_paths.get('synthesis')
-
-            progress.status = JobStatus.COMPLETE
-            progress.phase = "Analysis Complete"
-            progress.message = f"Done: {len(result.skeletons)} skeletons from {len(config.usernames)} creator(s)"
-            progress.completed_at = datetime.utcnow().isoformat()
-            result.success = True
+            logger.info("PIPELINE", f"Phase 1 complete: {output_dir}")
+            return output_dir
 
         except Exception as e:
-            logger.error("SKELETON", f"Pipeline failed: {e}")
+            logger.error("PIPELINE", f"Phase 1 failed: {e}")
             progress.status = JobStatus.FAILED
             progress.phase = "Failed"
             progress.errors.append(str(e))
-            progress.completed_at = datetime.utcnow().isoformat()
+            self._notify(on_progress, progress)
+            raise
 
+    # ------------------------------------------------------------------
+    # Phase 2 — Load Extraction Results + Aggregate + Prepare Synthesis
+    # ------------------------------------------------------------------
+
+    def aggregate_and_finish(
+        self,
+        output_dir: str,
+        on_progress: Optional[Callable[[JobProgress], None]] = None,
+    ) -> str:
+        """Phase 2: Read extraction results (written by Claude), aggregate, prepare synthesis.
+
+        Called AFTER Claude has written extraction-results.json to output_dir.
+        Returns output_dir (synthesis-prompt.md ready for Claude).
+        """
+        progress = JobProgress(
+            status=JobStatus.AGGREGATING,
+            phase="Loading extraction results...",
+        )
         self._notify(on_progress, progress)
-        return result
 
-    def _scrape_and_transcribe(self, config: JobConfig, progress: JobProgress, on_progress: Optional[Callable]) -> list[dict]:
+        try:
+            # Load transcripts for metadata enrichment
+            transcripts_path = os.path.join(output_dir, "transcripts.json")
+            transcripts = None
+            if os.path.exists(transcripts_path):
+                with open(transcripts_path) as f:
+                    transcripts = json.load(f)
+
+            # Load extraction results
+            extractor = BatchedExtractor()
+            skeletons = extractor.load_extraction_results(output_dir, transcripts=transcripts)
+
+            if not skeletons:
+                raise ValueError("No valid skeletons in extraction results")
+
+            # Aggregate patterns
+            progress.phase = "Aggregating patterns..."
+            progress.skeletons_extracted = len(skeletons)
+            self._notify(on_progress, progress)
+
+            aggregator = SkeletonAggregator()
+            aggregated = aggregator.aggregate(skeletons)
+
+            # Save skeletons for later use in finalize
+            skeletons_out = os.path.join(output_dir, "skeletons.json")
+            with open(skeletons_out, 'w', encoding='utf-8') as f:
+                json.dump(skeletons, f, indent=2, default=str)
+
+            # Prepare synthesis prompt
+            progress.status = JobStatus.SYNTHESIZING
+            progress.phase = "Preparing synthesis prompt..."
+            self._notify(on_progress, progress)
+
+            synthesizer = PatternSynthesizer()
+            synthesizer.prepare_synthesis(skeletons, output_dir)
+
+            progress.phase = f"Phase 2 complete — synthesis prompt ready"
+            progress.message = f"Synthesis prompt written to {output_dir}"
+            self._notify(on_progress, progress)
+
+            logger.info("PIPELINE", f"Phase 2 complete: {output_dir}")
+            return output_dir
+
+        except Exception as e:
+            logger.error("PIPELINE", f"Phase 2 failed: {e}")
+            progress.status = JobStatus.FAILED
+            progress.phase = "Failed"
+            progress.errors.append(str(e))
+            self._notify(on_progress, progress)
+            raise
+
+    # ------------------------------------------------------------------
+    # Phase 3 — Load Synthesis Results + Save Final Report
+    # ------------------------------------------------------------------
+
+    def finalize(
+        self,
+        output_dir: str,
+        job_config: Optional[JobConfig] = None,
+        on_progress: Optional[Callable[[JobProgress], None]] = None,
+    ) -> dict:
+        """Phase 3: Read synthesis results, merge into data/recon/.
+
+        Called AFTER Claude has written synthesis-results.json.
+        Returns a dict with paths to the final report, skeletons, and synthesis files.
+        """
+        progress = JobProgress(
+            status=JobStatus.COMPLETE,
+            phase="Loading synthesis results...",
+        )
+        self._notify(on_progress, progress)
+
+        try:
+            # Load synthesis results
+            synthesizer = PatternSynthesizer()
+            synthesis = synthesizer.load_synthesis_results(output_dir)
+
+            # Load skeletons for the report
+            skeletons_path = os.path.join(output_dir, "skeletons.json")
+            skeletons = []
+            if os.path.exists(skeletons_path):
+                with open(skeletons_path) as f:
+                    skeletons = json.load(f)
+
+            # Aggregate for the report summary
+            aggregator = SkeletonAggregator()
+            aggregated = aggregator.aggregate(skeletons)
+
+            # Save synthesis results
+            synthesis_out = os.path.join(output_dir, "synthesis.json")
+            with open(synthesis_out, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'success': synthesis.success,
+                    'analysis': synthesis.analysis,
+                    'templates': synthesis.templates,
+                    'quick_wins': synthesis.quick_wins,
+                    'warnings': synthesis.warnings,
+                    'model_used': synthesis.model_used,
+                    'synthesized_at': synthesis.synthesized_at,
+                }, f, indent=2)
+
+            # Generate markdown report
+            config_dict = asdict(job_config) if job_config else {}
+            report_content = generate_report(
+                data=aggregated, synthesis=synthesis, job_config=config_dict,
+            )
+            report_path = os.path.join(output_dir, "report.md")
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+
+            progress.status = JobStatus.COMPLETE
+            progress.phase = "Analysis Complete"
+            progress.message = f"Done: {len(skeletons)} skeletons analyzed"
+            progress.completed_at = datetime.utcnow().isoformat()
+            self._notify(on_progress, progress)
+
+            logger.info("PIPELINE", f"Phase 3 complete: {output_dir}")
+
+            return {
+                'report': report_path,
+                'skeletons': skeletons_path,
+                'synthesis': synthesis_out,
+                'skeleton_count': len(skeletons),
+                'output_dir': output_dir,
+            }
+
+        except Exception as e:
+            logger.error("PIPELINE", f"Phase 3 failed: {e}")
+            progress.status = JobStatus.FAILED
+            progress.phase = "Failed"
+            progress.errors.append(str(e))
+            self._notify(on_progress, progress)
+            raise
+
+    # ------------------------------------------------------------------
+    # Internal — Scrape + Transcribe helpers
+    # ------------------------------------------------------------------
+
+    def _scrape_and_transcribe(
+        self,
+        config: JobConfig,
+        progress: JobProgress,
+        on_progress: Optional[Callable],
+    ) -> list[dict]:
         """Scrape videos and get transcripts using Instaloader for IG."""
         transcripts = []
-        openai_key = config.openai_api_key or os.getenv('OPENAI_API_KEY')
 
-        # Load local Whisper if needed
-        whisper_model = None
-        if config.transcribe_provider == 'local' and WHISPER_AVAILABLE:
-            progress.message = f"Loading Whisper model ({config.whisper_model})..."
-            self._notify(on_progress, progress)
-            whisper_model = load_whisper_model(config.whisper_model)
-            if not whisper_model:
-                config.transcribe_provider = 'openai'
+        # Load local Whisper model
+        progress.status = JobStatus.TRANSCRIBING
+        progress.message = f"Loading Whisper model ({config.whisper_model})..."
+        self._notify(on_progress, progress)
+        whisper_model = load_whisper_model(config.whisper_model)
+        if not whisper_model:
+            raise RuntimeError(f"Failed to load Whisper model '{config.whisper_model}'")
 
         # Setup InstaClient for IG competitors
         insta_client = None
@@ -299,12 +444,8 @@ class SkeletonRipperPipeline:
                 progress.message = f"Video {valid_count + 1}/{config.videos_per_creator}: Transcribing ({views_display} views)"
                 self._notify(on_progress, progress)
 
-                # Transcribe
-                transcript_text = None
-                if config.transcribe_provider == 'openai' and openai_key:
-                    transcript_text = transcribe_video_openai(str(video_path), openai_key)
-                elif whisper_model:
-                    transcript_text = transcribe_video_local(str(video_path), whisper_model)
+                # Transcribe with local Whisper
+                transcript_text = transcribe_video(str(video_path), whisper_model)
 
                 # Cleanup video
                 try:
@@ -349,13 +490,6 @@ class SkeletonRipperPipeline:
                 pass
         return cached
 
-    def _update_extraction_progress(self, progress, done, total, batch, total_batches, on_progress):
-        progress.skeletons_extracted = done
-        progress.extraction_batch = batch
-        progress.extraction_total_batches = total_batches
-        progress.message = f"Extracting: batch {batch}/{total_batches} ({done}/{total} done)"
-        self._notify(on_progress, progress)
-
     def _notify(self, callback, progress):
         if callback:
             try:
@@ -363,69 +497,114 @@ class SkeletonRipperPipeline:
             except Exception:
                 pass
 
-    def _save_outputs(self, job_id: str, config: JobConfig, result: JobResult) -> dict[str, str]:
-        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
-        job_dir = self.output_dir / f"{timestamp}_{job_id}"
-        job_dir.mkdir(parents=True, exist_ok=True)
-        paths = {}
 
-        skeletons_path = job_dir / 'skeletons.json'
-        with open(skeletons_path, 'w', encoding='utf-8') as f:
-            json.dump(result.skeletons, f, indent=2, default=str)
-        paths['skeletons'] = str(skeletons_path)
+# ======================================================================
+# Backward-compat aliases
+# ======================================================================
 
-        if result.synthesis:
-            synthesis_path = job_dir / 'synthesis.json'
-            with open(synthesis_path, 'w', encoding='utf-8') as f:
-                json.dump({
-                    'success': result.synthesis.success,
-                    'analysis': result.synthesis.analysis,
-                    'templates': result.synthesis.templates,
-                    'quick_wins': result.synthesis.quick_wins,
-                    'warnings': result.synthesis.warnings,
-                    'model_used': result.synthesis.model_used,
-                    'synthesized_at': result.synthesis.synthesized_at
-                }, f, indent=2)
-            paths['synthesis'] = str(synthesis_path)
-
-        if result.aggregated and result.synthesis:
-            report_path = job_dir / 'report.md'
-            report_content = generate_report(
-                data=result.aggregated, synthesis=result.synthesis,
-                job_config=asdict(config)
-            )
-            with open(report_path, 'w', encoding='utf-8') as f:
-                f.write(report_content)
-            paths['report'] = str(report_path)
-
-        return paths
+# Old name kept as alias so existing imports still work
+SkeletonRipperPipeline = ReconPipeline
 
 
 def create_job_config(
-    usernames: list[str], videos_per_creator: int = 3, platform: str = "instagram",
-    llm_provider: str = "openai", llm_model: str = "gpt-4o-mini",
-    transcribe_provider: str = "openai", whisper_model: str = "small.en",
-    openai_api_key: Optional[str] = None
+    usernames: list[str],
+    videos_per_creator: int = 3,
+    platform: str = "instagram",
+    whisper_model: str = "small.en",
+    # Deprecated kwargs accepted but ignored for backward compat
+    llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    transcribe_provider: Optional[str] = None,
+    openai_api_key: Optional[str] = None,
 ) -> JobConfig:
     return JobConfig(
-        usernames=usernames, videos_per_creator=videos_per_creator,
-        platform=platform, llm_provider=llm_provider, llm_model=llm_model,
-        transcribe_provider=transcribe_provider, whisper_model=whisper_model,
-        openai_api_key=openai_api_key
+        usernames=usernames,
+        videos_per_creator=videos_per_creator,
+        platform=platform,
+        whisper_model=whisper_model,
     )
 
 
 def run_skeleton_ripper(
-    usernames: list[str], videos_per_creator: int = 3, platform: str = "instagram",
-    llm_provider: str = "openai", llm_model: str = "gpt-4o-mini",
-    transcribe_provider: str = "openai", whisper_model: str = "small.en",
-    openai_api_key: Optional[str] = None, on_progress: Optional[Callable] = None
-) -> JobResult:
+    usernames: list[str],
+    videos_per_creator: int = 3,
+    platform: str = "instagram",
+    whisper_model: str = "small.en",
+    on_progress: Optional[Callable] = None,
+    # Deprecated kwargs accepted but ignored
+    llm_provider: Optional[str] = None,
+    llm_model: Optional[str] = None,
+    transcribe_provider: Optional[str] = None,
+    openai_api_key: Optional[str] = None,
+) -> str:
+    """Convenience wrapper — runs Phase 1 and returns output_dir."""
     config = create_job_config(
-        usernames=usernames, videos_per_creator=videos_per_creator,
-        platform=platform, llm_provider=llm_provider, llm_model=llm_model,
-        transcribe_provider=transcribe_provider, whisper_model=whisper_model,
-        openai_api_key=openai_api_key
+        usernames=usernames,
+        videos_per_creator=videos_per_creator,
+        platform=platform,
+        whisper_model=whisper_model,
     )
-    pipeline = SkeletonRipperPipeline()
-    return pipeline.run(config, on_progress=on_progress)
+    pipeline = ReconPipeline()
+    return pipeline.scrape_and_transcribe(config, on_progress=on_progress)
+
+
+# ======================================================================
+# Provider discovery — moved from llm_client.py (UI still needs it)
+# ======================================================================
+
+def get_available_providers() -> list[dict]:
+    """Return available LLM providers for the settings UI.
+
+    This is informational only — the pipeline no longer calls LLMs directly.
+    Kept so the web UI can still show which API keys are configured.
+    """
+    import requests as _requests
+
+    _PROVIDER_DEFS = [
+        {'id': 'openai', 'name': 'OpenAI', 'api_key_env': 'OPENAI_API_KEY', 'models': [
+            {'id': 'gpt-4o-mini', 'name': 'GPT-4o Mini', 'cost_tier': 'low'},
+            {'id': 'gpt-4o', 'name': 'GPT-4o', 'cost_tier': 'medium'},
+        ]},
+        {'id': 'anthropic', 'name': 'Anthropic', 'api_key_env': 'ANTHROPIC_API_KEY', 'models': [
+            {'id': 'claude-3-haiku-20240307', 'name': 'Claude 3 Haiku', 'cost_tier': 'low'},
+            {'id': 'claude-3-sonnet-20240229', 'name': 'Claude 3 Sonnet', 'cost_tier': 'medium'},
+        ]},
+        {'id': 'google', 'name': 'Google', 'api_key_env': 'GOOGLE_API_KEY', 'models': [
+            {'id': 'gemini-1.5-flash', 'name': 'Gemini 1.5 Flash', 'cost_tier': 'low'},
+            {'id': 'gemini-1.5-pro', 'name': 'Gemini 1.5 Pro', 'cost_tier': 'medium'},
+        ]},
+        {'id': 'local', 'name': 'Local (Ollama)', 'api_key_env': '', 'models': [
+            {'id': 'qwen3', 'name': 'Qwen 3 (Recommended)', 'cost_tier': 'free'},
+            {'id': 'llama3', 'name': 'Llama 3', 'cost_tier': 'free'},
+            {'id': 'mistral', 'name': 'Mistral', 'cost_tier': 'free'},
+        ]},
+    ]
+
+    result = []
+    for pdef in _PROVIDER_DEFS:
+        available = False
+        models = []
+        if pdef['id'] == 'local':
+            try:
+                resp = _requests.get('http://localhost:11434/api/tags', timeout=2)
+                if resp.status_code == 200:
+                    available = True
+                    data = resp.json()
+                    installed = {m['name'].split(':')[0] for m in data.get('models', [])}
+                    models = [m for m in pdef['models'] if m['id'] in installed]
+            except _requests.exceptions.RequestException:
+                pass
+        else:
+            api_key = os.getenv(pdef['api_key_env'])
+            if api_key:
+                available = True
+                models = pdef['models']
+
+        result.append({
+            'id': pdef['id'],
+            'name': pdef['name'],
+            'available': available,
+            'models': models,
+        })
+
+    return result
